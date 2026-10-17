@@ -189,7 +189,37 @@ jobs:
 
       - name: Set up GitHub Pages
         uses: actions/configure-pages@v5
+- name: Install FIX GAMES Custom Logo
+        shell: bash
+        run: |
+          curl -fL "https://raw.githubusercontent.com/abo-adnan1/fixgames1/main/logo-1.png" -o site/logo-1.png
 
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          for name in ("index.html", "jb.html"):
+              p = Path("site") / name
+              html = p.read_text(encoding="utf-8")
+
+              html = re.sub(
+                  r'(?:\./)?(?:index_files/)?abo-logo\.svg',
+                  'logo-1.png',
+                  html
+              )
+
+              html = html.replace(
+                  'width:28px; height:28px;',
+                  'width:85px; height:85px; object-fit:cover; background:white; padding:2px;'
+              )
+
+              p.write_text(html, encoding="utf-8")
+
+          p = Path("site/cache.appcache")
+          cache = p.read_text(encoding="utf-8")
+          cache = cache.replace("abo-logo.svg", "logo-1.png")
+          p.write_text(cache, encoding="utf-8")
+          PY
       - name: Upload complete host
         uses: actions/upload-pages-artifact@v3
         with:
