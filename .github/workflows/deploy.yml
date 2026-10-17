@@ -1,0 +1,200 @@
+name: Publish ABO ADNAN SAYO PS4 Host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ps4-github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download complete RAW13G host
+        run: |
+          git clone --depth 1 https://github.com/raw13g/raw13g.github.io.git site
+          rm -rf site/.git
+
+      - name: Apply ABO ADNAN branding and check supported versions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          root = Path('site')
+          required = [
+              'index.html', 'jb.html', 'jb.js',
+              'core.js', 'mem.js', 'int64.js',
+              'ps4_offsets.js', 'rpc_worker.js',
+              'payload2.bin', 'cache.appcache', 'LICENSE'
+          ]
+
+          for file in required:
+              path = root / file
+              if not path.is_file() or not path.stat().st_size:
+                  raise RuntimeError(
+                      f'Upstream required file missing: {file}'
+                  )
+
+          idx_path = root / 'index.html'
+          idx = idx_path.read_text(encoding='utf-8')
+
+          found = re.search(
+              r'var\s+SUPPORTED\s*=\s*\{([^}]+)\}',
+              idx
+          )
+
+          if not found:
+              raise RuntimeError(
+                  'Upstream version detector changed: stop and review'
+              )
+
+          supported_table = found.group(1)
+
+          for fw in ('1302', '1304', '1350', '1352'):
+              if not re.search(
+                  r'\b' + fw + r'\s*:\s*1\b',
+                  supported_table
+              ):
+                  raise RuntimeError(
+                      'Firmware not supported upstream: ' + fw
+                  )
+
+          if re.search(
+              r'\b1358\s*:\s*1\b',
+              supported_table
+          ):
+              raise RuntimeError(
+                  'Firmware 13.58 added upstream: review support'
+              )
+
+          force_code = (
+              'var forced = params.get("force") === "1";'
+          )
+
+          unsafe_message = (
+              'waitForTap("UNSUPPORTED (" + '
+              '(key || "unknown") + '
+              '") -- press X or tap to run anyway", go);'
+          )
+
+          if force_code not in idx or unsafe_message not in idx:
+              raise RuntimeError(
+                  'Upstream safety gate changed'
+              )
+
+          idx = idx.replace(
+              force_code,
+              'var forced = false;'
+          )
+
+          idx = idx.replace(
+              unsafe_message,
+              'setCache("Supported: 13.02 / 13.04 / '
+              '13.50 / 13.52. '
+              '13.58 is not supported by this build.");'
+          )
+
+          logo = '''
+          <svg xmlns="http://www.w3.org/2000/svg"
+          width="64" height="64" viewBox="0 0 64 64">
+          <rect width="64" height="64"
+          rx="13" fill="#121c2a"/>
+          <path d="M13 48L27 15h10l14 33H40l-3-8H26l-3 8zm17-18h4l-2-7z"
+          fill="#40ccff"/>
+          </svg>
+          '''
+
+          (root / 'abo-logo.svg').write_text(
+              logo, encoding='utf-8'
+          )
+
+          for name in ('index.html', 'jb.html'):
+              p = root / name
+
+              if name == 'index.html':
+                  content = idx
+              else:
+                  content = p.read_text(encoding='utf-8')
+
+              content = content.replace(
+                  'RAW GAME', 'ABO ADNAN SAYO'
+              )
+
+              content = content.replace(
+                  'logo_raw.png', 'abo-logo.svg'
+              )
+
+              p.write_text(
+                  content, encoding='utf-8'
+              )
+
+          manifest = root / 'cache.appcache'
+          content = manifest.read_text(encoding='utf-8')
+
+          if not content.startswith('CACHE MANIFEST'):
+              raise RuntimeError(
+                  'Unexpected upstream cache manifest'
+              )
+
+          version = os.environ.get(
+              'GITHUB_RUN_ID', 'manual'
+          )
+
+          content = content.replace(
+              'CACHE MANIFEST\n',
+              'CACHE MANIFEST\n'
+              '# ABO ADNAN SAYO deployment '
+              + version + '\nabo-logo.svg\n',
+              1
+          )
+
+          manifest.write_text(
+              content, encoding='utf-8'
+          )
+
+          (root / '.nojekyll').write_text('')
+
+          (root / 'CREDITS.txt').write_text(
+              'Host adapted from '
+              'https://github.com/raw13g/raw13g.github.io\n'
+              'Original LICENSE retained.\n'
+              'Third-party code and payloads retain '
+              'their licenses.\n'
+              'PS4 FW 13.58 is not supported.\n',
+              encoding='utf-8'
+          )
+
+          print(
+              'Site prepared: '
+              '13.02, 13.04, 13.50, 13.52'
+          )
+          PY
+
+      - name: Set up GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload complete host
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
