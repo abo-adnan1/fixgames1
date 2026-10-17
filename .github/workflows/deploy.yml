@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/deploy.yml"
+      - "logo-1.png"
   workflow_dispatch:
 
 permissions:
@@ -19,212 +20,189 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Download complete RAW13G host
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download original host
+        shell: bash
         run: |
           git clone --depth 1 https://github.com/raw13g/raw13g.github.io.git site
+
           rm -rf site/.git
 
-      - name: Apply ABO ADNAN branding and check supported versions
+          if [ ! -f logo-1.png ]; then
+            echo "ERROR: logo-1.png not found"
+            exit 1
+          fi
+
+          cp logo-1.png site/logo-1.png
+
+      - name: Apply custom branding
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import os
           import re
+          import os
 
-          root = Path('site')
+          root = Path("site")
+
+          # Check required files
           required = [
-              'index.html', 'jb.html', 'jb.js',
-              'core.js', 'mem.js', 'int64.js',
-              'ps4_offsets.js', 'rpc_worker.js',
-              'payload2.bin', 'cache.appcache', 'LICENSE'
+              "index.html",
+              "jb.html",
+              "jb.js",
+              "core.js",
+              "mem.js",
+              "int64.js",
+              "ps4_offsets.js",
+              "rpc_worker.js",
+              "payload2.bin",
+              "cache.appcache",
+              "logo-1.png"
           ]
 
           for file in required:
               path = root / file
-              if not path.is_file() or not path.stat().st_size:
+
+              if not path.exists():
                   raise RuntimeError(
-                      f'Upstream required file missing: {file}'
+                      "Missing file: " + file
                   )
 
-          idx_path = root / 'index.html'
-          idx = idx_path.read_text(encoding='utf-8')
+          # Update website branding
+          for filename in ["index.html", "jb.html"]:
 
-          found = re.search(
-              r'var\s+SUPPORTED\s*=\s*\{([^}]+)\}',
-              idx
-          )
+              path = root / filename
 
-          if not found:
-              raise RuntimeError(
-                  'Upstream version detector changed: stop and review'
+              html = path.read_text(
+                  encoding="utf-8"
               )
 
-          supported_table = found.group(1)
+              # Replace original title
+              html = html.replace(
+                  "RAW GAME",
+                  "ABO ADNAN SAYO"
+              )
 
-          for fw in ('1302', '1304', '1350', '1352'):
-              if not re.search(
-                  r'\b' + fw + r'\s*:\s*1\b',
-                  supported_table
-              ):
-                  raise RuntimeError(
-                      'Firmware not supported upstream: ' + fw
+              # Replace original logo
+              html = html.replace(
+                  "logo_raw.png",
+                  "logo-1.png"
+              )
+
+              html = html.replace(
+                  "abo-logo.svg",
+                  "logo-1.png"
+              )
+
+              # Custom circular logo
+              custom_css = """
+              <style>
+              #brand img {
+                  width: 96px !important;
+                  height: 96px !important;
+                  border-radius: 50% !important;
+                  object-fit: contain !important;
+                  background: white !important;
+                  border: 3px solid white !important;
+                  padding: 2px !important;
+                  margin-right: 10px !important;
+                  vertical-align: middle !important;
+                  box-sizing: border-box !important;
+              }
+
+              #brand {
+                  text-align: center;
+                  padding: 12px 10px;
+              }
+
+              #brand b {
+                  font-size: 16px;
+                  font-weight: bold;
+                  color: white;
+                  vertical-align: middle;
+              }
+              </style>
+              """
+
+              if "</head>" in html:
+                  html = html.replace(
+                      "</head>",
+                      custom_css + "\n</head>",
+                      1
                   )
 
-          if re.search(
-              r'\b1358\s*:\s*1\b',
-              supported_table
-          ):
-              raise RuntimeError(
-                  'Firmware 13.58 added upstream: review support'
+              path.write_text(
+                  html,
+                  encoding="utf-8"
               )
 
-          force_code = (
-              'var forced = params.get("force") === "1";'
+          # Update offline cache
+          manifest = root / "cache.appcache"
+
+          cache = manifest.read_text(
+              encoding="utf-8"
           )
 
-          unsafe_message = (
-              'waitForTap("UNSUPPORTED (" + '
-              '(key || "unknown") + '
-              '") -- press X or tap to run anyway", go);'
+          cache = cache.replace(
+              "logo_raw.png",
+              "logo-1.png"
           )
 
-          if force_code not in idx or unsafe_message not in idx:
-              raise RuntimeError(
-                  'Upstream safety gate changed'
-              )
-
-          idx = idx.replace(
-              force_code,
-              'var forced = false;'
+          cache = cache.replace(
+              "abo-logo.svg",
+              "logo-1.png"
           )
 
-          idx = idx.replace(
-              unsafe_message,
-              'setCache("Supported: 13.02 / 13.04 / '
-              '13.50 / 13.52. '
-              '13.58 is not supported by this build.");'
-          )
-
-          logo = '''
-          <svg xmlns="http://www.w3.org/2000/svg"
-          width="64" height="64" viewBox="0 0 64 64">
-          <rect width="64" height="64"
-          rx="13" fill="#121c2a"/>
-          <path d="M13 48L27 15h10l14 33H40l-3-8H26l-3 8zm17-18h4l-2-7z"
-          fill="#40ccff"/>
-          </svg>
-          '''
-
-          (root / 'abo-logo.svg').write_text(
-              logo, encoding='utf-8'
-          )
-
-          for name in ('index.html', 'jb.html'):
-              p = root / name
-
-              if name == 'index.html':
-                  content = idx
-              else:
-                  content = p.read_text(encoding='utf-8')
-
-              content = content.replace(
-                  'RAW GAME', 'ABO ADNAN SAYO'
-              )
-
-              content = content.replace(
-                  'logo_raw.png', 'abo-logo.svg'
-              )
-
-              p.write_text(
-                  content, encoding='utf-8'
-              )
-
-          manifest = root / 'cache.appcache'
-          content = manifest.read_text(encoding='utf-8')
-
-          if not content.startswith('CACHE MANIFEST'):
-              raise RuntimeError(
-                  'Unexpected upstream cache manifest'
-              )
+          if "logo-1.png" not in cache:
+              cache += "\nlogo-1.png\n"
 
           version = os.environ.get(
-              'GITHUB_RUN_ID', 'manual'
+              "GITHUB_RUN_ID",
+              "1"
           )
 
-          content = content.replace(
-              'CACHE MANIFEST\n',
-              'CACHE MANIFEST\n'
-              '# ABO ADNAN SAYO deployment '
-              + version + '\nabo-logo.svg\n',
+          cache = cache.replace(
+              "CACHE MANIFEST\n",
+              "CACHE MANIFEST\n"
+              "# ABO ADNAN LOGO UPDATE "
+              + version + "\n",
               1
           )
 
           manifest.write_text(
-              content, encoding='utf-8'
+              cache,
+              encoding="utf-8"
           )
 
-          (root / '.nojekyll').write_text('')
+          # Disable Jekyll processing
+          (root / ".nojekyll").write_text("")
 
-          (root / 'CREDITS.txt').write_text(
-              'Host adapted from '
-              'https://github.com/raw13g/raw13g.github.io\n'
-              'Original LICENSE retained.\n'
-              'Third-party code and payloads retain '
-              'their licenses.\n'
-              'PS4 FW 13.58 is not supported.\n',
-              encoding='utf-8'
-          )
+          print("================================")
+          print("ABO ADNAN SAYO")
+          print("Custom logo installed")
+          print("Logo: logo-1.png")
+          print("Logo size: 96px")
+          print("GitHub Pages ready")
+          print("================================")
 
-          print(
-              'Site prepared: '
-              '13.02, 13.04, 13.50, 13.52'
-          )
           PY
 
-      - name: Set up GitHub Pages
+      - name: Setup GitHub Pages
         uses: actions/configure-pages@v5
-- name: Install FIX GAMES Custom Logo
-        shell: bash
-        run: |
-          curl -fL "https://raw.githubusercontent.com/abo-adnan1/fixgames1/main/logo-1.png" -o site/logo-1.png
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          for name in ("index.html", "jb.html"):
-              p = Path("site") / name
-              html = p.read_text(encoding="utf-8")
-
-              html = re.sub(
-                  r'(?:\./)?(?:index_files/)?abo-logo\.svg',
-                  'logo-1.png',
-                  html
-              )
-
-              html = html.replace(
-                  'width:28px; height:28px;',
-                  'width:85px; height:85px; object-fit:cover; background:white; padding:2px;'
-              )
-
-              p.write_text(html, encoding="utf-8")
-
-          p = Path("site/cache.appcache")
-          cache = p.read_text(encoding="utf-8")
-          cache = cache.replace("abo-logo.svg", "logo-1.png")
-          p.write_text(cache, encoding="utf-8")
-          PY
-      - name: Upload complete host
+      - name: Upload website
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-      - name: Deploy GitHub Pages
+      - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4
