@@ -29,31 +29,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download original host
+      - name: Download complete RAW13G host
         shell: bash
         run: |
           git clone --depth 1 https://github.com/raw13g/raw13g.github.io.git site
 
           rm -rf site/.git
 
-          if [ ! -f logo-1.png ]; then
+          if [ ! -s logo-1.png ]; then
             echo "ERROR: logo-1.png not found"
             exit 1
           fi
 
           cp logo-1.png site/logo-1.png
 
-      - name: Apply custom branding
+      - name: Apply ABO ADNAN branding
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
           import os
+          import re
 
           root = Path("site")
 
-          # Check required files
           required = [
               "index.html",
               "jb.html",
@@ -65,44 +64,119 @@ jobs:
               "rpc_worker.js",
               "payload2.bin",
               "cache.appcache",
+              "LICENSE",
               "logo-1.png"
           ]
 
           for file in required:
               path = root / file
+              if not path.is_file() or not path.stat().st_size:
+                  raise RuntimeError("Missing file: " + file)
 
-              if not path.exists():
+          idx_path = root / "index.html"
+          idx = idx_path.read_text(encoding="utf-8")
+
+          found = re.search(
+              r'var\s+SUPPORTED\s*=\s*\{([^}]+)\}',
+              idx
+          )
+
+          if not found:
+              raise RuntimeError("Version detector changed")
+
+          supported_table = found.group(1)
+
+          for fw in ("1302", "1304", "1350", "1352"):
+              if not re.search(
+                  r'\b' + fw + r'\s*:\s*1\b',
+                  supported_table
+              ):
                   raise RuntimeError(
-                      "Missing file: " + file
+                      "Firmware not supported upstream: " + fw
                   )
 
-          # Update website branding
-          for filename in ["index.html", "jb.html"]:
+          if re.search(
+              r'\b1358\s*:\s*1\b',
+              supported_table
+          ):
+              raise RuntimeError(
+                  "Firmware 13.58 needs verification"
+              )
+
+          force_code = 'var forced = params.get("force") === "1";'
+
+          unsafe_message = (
+              'waitForTap("UNSUPPORTED (" + '
+              '(key || "unknown") + '
+              '") -- press X or tap to run anyway", go);'
+          )
+
+          if force_code not in idx or unsafe_message not in idx:
+              raise RuntimeError("Safety gate changed")
+
+          idx = idx.replace(
+              force_code,
+              'var forced = false;'
+          )
+
+          idx = idx.replace(
+              unsafe_message,
+              'setCache("Supported: 13.02 / 13.04 / '
+              '13.50 / 13.52. '
+              '13.58 is not supported by this build.");'
+          )
+
+          brand_image = re.compile(
+              r"(<div\b[^>]*\bid\s*=\s*"
+              r"[\'\"]brand[\'\"][^>]*>\s*"
+              r"<img\b)([^>]*)(>)",
+              re.IGNORECASE | re.DOTALL
+          )
+
+          def replace_logo(match):
+              attrs = match.group(2)
+
+              source = re.compile(
+                  r"\bsrc\s*=\s*([\'\"]).*?\1",
+                  re.IGNORECASE | re.DOTALL
+              )
+
+              if source.search(attrs):
+                  attrs = source.sub(
+                      'src="logo-1.png"',
+                      attrs,
+                      count=1
+                  )
+              else:
+                  attrs += ' src="logo-1.png"'
+
+              return match.group(1) + attrs + match.group(3)
+
+          for filename in ("index.html", "jb.html"):
 
               path = root / filename
 
-              html = path.read_text(
-                  encoding="utf-8"
-              )
+              if filename == "index.html":
+                  html = idx
+              else:
+                  html = path.read_text(encoding="utf-8")
 
-              # Replace original title
               html = html.replace(
                   "RAW GAME",
                   "ABO ADNAN SAYO"
               )
 
-              # Replace original logo
-              html = html.replace(
-                  "logo_raw.png",
-                  "logo-1.png"
+              html, changed = brand_image.subn(
+                  replace_logo,
+                  html,
+                  count=1
               )
 
-              html = html.replace(
-                  "abo-logo.svg",
-                  "logo-1.png"
-              )
+              if changed != 1:
+                  raise RuntimeError(
+                      "Logo element not found in " + filename
+                  )
 
-              # Custom circular logo
               custom_css = """
               <style>
               #brand img {
@@ -132,37 +206,25 @@ jobs:
               </style>
               """
 
-              if "</head>" in html:
-                  html = html.replace(
-                      "</head>",
-                      custom_css + "\n</head>",
-                      1
-                  )
+              html = html.replace(
+                  "</head>",
+                  custom_css + "\n</head>",
+                  1
+              )
 
               path.write_text(
                   html,
                   encoding="utf-8"
               )
 
-          # Update offline cache
           manifest = root / "cache.appcache"
 
           cache = manifest.read_text(
               encoding="utf-8"
           )
 
-          cache = cache.replace(
-              "logo_raw.png",
-              "logo-1.png"
-          )
-
-          cache = cache.replace(
-              "abo-logo.svg",
-              "logo-1.png"
-          )
-
-          if "logo-1.png" not in cache:
-              cache += "\nlogo-1.png\n"
+          if not cache.startswith("CACHE MANIFEST"):
+              raise RuntimeError("Unexpected cache manifest")
 
           version = os.environ.get(
               "GITHUB_RUN_ID",
@@ -173,7 +235,8 @@ jobs:
               "CACHE MANIFEST\n",
               "CACHE MANIFEST\n"
               "# ABO ADNAN LOGO UPDATE "
-              + version + "\n",
+              + version + "\n"
+              + "logo-1.png\n",
               1
           )
 
@@ -182,27 +245,35 @@ jobs:
               encoding="utf-8"
           )
 
-          # Disable Jekyll processing
           (root / ".nojekyll").write_text("")
 
-          print("================================")
+          (root / "CREDITS.txt").write_text(
+              "Host adapted from "
+              "https://github.com/raw13g/raw13g.github.io\n"
+              "Original LICENSE retained.\n"
+              "Third-party code retains its licenses.\n"
+              "PS4 FW 13.58 is not supported.\n",
+              encoding="utf-8"
+          )
+
+          print("==============================")
           print("ABO ADNAN SAYO")
           print("Custom logo installed")
-          print("Logo: logo-1.png")
-          print("Logo size: 96px")
-          print("GitHub Pages ready")
-          print("================================")
-
+          print("Image: logo-1.png")
+          print("Size: 96px")
+          print("Shape: Circle")
+          print("Cache updated")
+          print("==============================")
           PY
 
-      - name: Setup GitHub Pages
+      - name: Set up GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload website
+      - name: Upload complete host
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-      - name: Deploy website
+      - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
